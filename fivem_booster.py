@@ -1,5 +1,5 @@
 """
-FiveM Booster v2  -  pywebview, ธีมขาว, ฟอนต์สวย, มี ToS, ปรับแต่งได้
+FiveM Booster v3  -  pywebview, ธีมขาว, ฟอนต์สวย, มี ToS, ปรับแต่งได้
 ติดตั้ง:  pip install pywebview psutil
 รัน:      python fivem_booster_v2.py   (แนะนำ Run as Administrator)
 ฟอนต์โหลดจาก Google Fonts (ต้องต่ออินเทอร์เน็ตครั้งแรก ถ้าไม่มีจะใช้ Leelawadee UI / Segoe UI แทน)
@@ -18,7 +18,7 @@ except ImportError:
 
 IS_WIN = os.name == "nt"
 NOWIN = 0x08000000 if IS_WIN else 0
-TOS_VERSION = "2.0"
+TOS_VERSION = "3.0"
 HIGH_PERF = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
 CFG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "FiveMBooster")
 CFG_FILE = os.path.join(CFG_DIR, "config.json")
@@ -191,6 +191,57 @@ TASKS = [
 TASK_FN = {t[0]: t[3] for t in TASKS}
 
 
+
+# ------------------------------------------------------------------ app catalog (winget)
+CATALOG = [
+    ("ความปลอดภัย", [
+        ("Malwarebytes.Malwarebytes", "Malwarebytes", "สแกนและกำจัดมัลแวร์ แอดแวร์ (มีรุ่นฟรี)"),
+        ("Microsoft.Sysinternals.Autoruns", "Autoruns", "ดูและปิดโปรแกรมที่แอบเปิดพร้อมเครื่อง"),
+    ]),
+    ("ตรวจสอบเครื่อง", [
+        ("REALiX.HWiNFO", "HWiNFO", "ดูอุณหภูมิและเซนเซอร์ของทุกชิ้นส่วน"),
+        ("CPUID.CPU-Z", "CPU-Z", "ดูรายละเอียด CPU / RAM / เมนบอร์ด"),
+        ("TechPowerUp.GPU-Z", "GPU-Z", "ดูรายละเอียดและโหลดของการ์ดจอ"),
+        ("CrystalDewWorld.CrystalDiskInfo", "CrystalDiskInfo", "เช็กสุขภาพ SSD / HDD"),
+    ]),
+    ("ล้างและเร่งความเร็ว", [
+        ("BleachBit.BleachBit", "BleachBit", "ล้างขยะระบบและแอปแบบละเอียด"),
+        ("Bitsum.ProcessLasso", "Process Lasso", "จัดลำดับ CPU ของโปรเซสอัตโนมัติ"),
+        ("JAMSoftware.TreeSize.Free", "TreeSize Free", "หาว่าอะไรกินพื้นที่ดิสก์"),
+        ("voidtools.Everything", "Everything", "ค้นหาไฟล์ในเครื่องไวมาก"),
+    ]),
+    ("เกมและไดรเวอร์", [
+        ("Guru3D.Afterburner", "MSI Afterburner", "ปรับพัดลม ดูอุณหภูมิ/FPS ในเกม"),
+        ("Wagnardsoft.DisplayDriverUninstaller", "DDU", "ถอนไดรเวอร์การ์ดจอให้เกลี้ยงก่อนลงใหม่"),
+        ("Microsoft.VCRedist.2015+.x64", "Visual C++ Runtime", "ไลบรารีที่เกมส่วนใหญ่ต้องใช้"),
+        ("Microsoft.DirectX", "DirectX Runtime", "ไฟล์ DirectX ที่เกมเก่า ๆ ต้องใช้"),
+        ("Discord.Discord", "Discord", "คุยเสียงระหว่างเล่น"),
+        ("7zip.7zip", "7-Zip", "แตกไฟล์ได้ทุกชนิด"),
+    ]),
+]
+PROTECTED = {"system", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe",
+             "explorer.exe", "svchost.exe", "smss.exe", "dwm.exe", "registry", "memcompression"}
+
+
+def winget(args, timeout=1800):
+    return subprocess.run(["winget"] + args + ["--accept-source-agreements"], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", creationflags=NOWIN, timeout=timeout)
+
+
+def parse_winget_table(out):
+    lines = [l.rstrip() for l in out.replace("\r", "\n").split("\n") if l.strip()]
+    for i, l in enumerate(lines):
+        if i and re.match(r"^-{5,}$", l.strip()):
+            starts = [m.start() for m in re.finditer(r"\S+", lines[i - 1])]
+            if len(starts) < 3: return []
+            res = []
+            for row in lines[i + 1:i + 13]:
+                name, pid = row[:starts[1]].strip(), row[starts[1]:starts[2]].strip()
+                if name and pid: res.append([pid, name, "จากคลัง winget"])
+            return res
+    return []
+
+
 # ------------------------------------------------------------------ api
 class Api:
     def __init__(self):
@@ -264,6 +315,105 @@ class Api:
         self.cfg["stats"]["runs"] += 1; self.cfg["stats"]["freed_mb"] += mb; save_cfg(self.cfg)
         self._js("onDone", mb, self.cfg["stats"]); self._busy = False
 
+    # ---------- โปรแกรมอำนวยความสะดวก (winget)
+    def apps(self):
+        try:
+            txt = winget(["list"], 120).stdout.lower()
+        except Exception:
+            return {"winget": False, "catalog": []}
+        cat = [[c, [[i, n, d, i.lower() in txt] for i, n, d in items]] for c, items in CATALOG]
+        return {"winget": True, "catalog": cat}
+
+    def search(self, q):
+        try:
+            return parse_winget_table(winget(["search", q.strip()[:60], "--count", "12"], 90).stdout)
+        except Exception:
+            return []
+
+    def install(self, pid):
+        threading.Thread(target=self._install, args=(pid,), daemon=True).start()
+
+    def _install(self, pid):
+        self._js("onInst", pid, "run", "กำลังดาวน์โหลดและติดตั้ง…")
+        try:
+            r = winget(["install", "--id", pid, "-e", "--silent", "--accept-package-agreements"])
+            tail = [l for l in (r.stdout + r.stderr).splitlines() if l.strip()][-1:] or [""]
+            if r.returncode == 0 or "already installed" in r.stdout.lower():
+                self._js("onInst", pid, "ok", "ติดตั้งเรียบร้อย")
+            else:
+                self._js("onInst", pid, "fail", "ติดตั้งไม่สำเร็จ: " + tail[0][:80])
+        except FileNotFoundError:
+            self._js("onInst", pid, "fail", "ไม่พบ winget (ต้องมี App Installer ของ Windows)")
+        except Exception as e:
+            self._js("onInst", pid, "fail", str(e)[:80])
+
+    # ---------- เครื่องมือดูแลเครื่อง
+    def sysinfo(self):
+        cpu = gpu = ""
+        if IS_WIN:
+            ps = "(Get-CimInstance Win32_Processor).Name; (Get-CimInstance Win32_VideoController | % Name) -join ' / '"
+            o = run(["powershell", "-NoProfile", "-Command", ps]).stdout.strip().splitlines()
+            cpu, gpu = (o + ["", ""])[:2]
+        disks = []
+        if psutil:
+            for p in psutil.disk_partitions(all=False):
+                try:
+                    u = psutil.disk_usage(p.mountpoint)
+                    disks.append([p.mountpoint, round(u.total / 2**30), u.percent, round(u.free / 2**30)])
+                except Exception: pass
+        return {"cpu": cpu, "gpu": gpu, "disks": disks}
+
+    def procs(self):
+        if not psutil: return []
+        rows = []
+        for p in psutil.process_iter(["pid", "name", "memory_info"]):
+            try: rows.append([p.info["pid"], p.info["name"], round(p.info["memory_info"].rss / 1048576)])
+            except Exception: pass
+        return sorted(rows, key=lambda r: -r[2])[:8]
+
+    def kill(self, pid, name):
+        if (name or "").lower() in PROTECTED or (name or "").lower().startswith(("fivem", "gta5")):
+            return "โปรเซสนี้ป้องกันไว้ ปิดไม่ได้"
+        try: psutil.Process(pid).kill(); return f"ปิด {name} แล้ว"
+        except Exception as e: return f"ปิดไม่สำเร็จ: {str(e)[:60]}"
+
+    def ping(self):
+        out = []
+        for n, h in (("Google", "8.8.8.8"), ("Cloudflare", "1.1.1.1"), ("Cfx.re", "servers-frontend.fivem.net")):
+            t = run(["ping", "-n", "4", h]).stdout.strip().splitlines()
+            nums = re.findall(r"(\d+)\s*ms", t[-1]) if t else []
+            out.append([n, int(nums[-1]) if nums else None])
+        return out
+
+    def startup_items(self):
+        items = []
+        if winreg:
+            for hive, tag in ((winreg.HKEY_CURRENT_USER, "ผู้ใช้"), (winreg.HKEY_LOCAL_MACHINE, "ทั้งเครื่อง")):
+                try:
+                    with winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+                        for i in range(winreg.QueryInfoKey(k)[1]):
+                            items.append([winreg.EnumValue(k, i)[0], tag])
+                except OSError: pass
+        return items
+
+    def quick(self, a):
+        ps = lambda c: run(["powershell", "-NoProfile", "-Command", c]).returncode == 0
+        try:
+            if a == "defender_scan": return "สแกนเสร็จ ดูผลใน Windows Security" if ps("Start-MpScan -ScanType QuickScan") else "สแกนไม่สำเร็จ (ลองรันแบบ Admin)"
+            if a == "defender_update": return "อัปเดตฐานไวรัสแล้ว" if ps("Update-MpSignature") else "อัปเดตไม่สำเร็จ"
+            if a == "sfc": return "ตรวจไฟล์ระบบเสร็จ" if run(["sfc", "/scannow"]).returncode == 0 else "ต้องรันแบบ Administrator"
+            if a == "recycle": return "ล้างถังขยะแล้ว" if ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, 7) in (0, -2147418113) else "ถังขยะว่างอยู่แล้ว"
+            if a == "crashes":
+                f = wipe(os.path.join(FIVEM_DIR, "FiveM.app", "crashes")); return f"ล้างไฟล์ Crash {f/1048576:.0f} MB"
+            if a == "cleanmgr": subprocess.Popen(["cleanmgr"]); return "เปิด Disk Cleanup แล้ว"
+            if a == "taskmgr": subprocess.Popen(["taskmgr"]); return "เปิด Task Manager แล้ว"
+            uri = {"startup": "ms-settings:startupapps", "winupdate": "ms-settings:windowsupdate",
+                   "gpu_settings": "ms-settings:display-advancedgraphics", "fivem_folder": FIVEM_DIR}.get(a)
+            if uri: os.startfile(uri); return "เปิดแล้ว"
+        except Exception as e:
+            return f"ทำไม่สำเร็จ: {str(e)[:70]}"
+        return "ไม่รู้จักคำสั่ง"
+
     def watcher(self):
         was = False
         while True:
@@ -328,7 +478,7 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
 .meter i:before{content:"";display:block;height:100%;width:var(--v,0%);border-radius:9px;background:linear-gradient(90deg,var(--a2),var(--accent));transition:width 1s}
 .panel{background:#fffd;border:1px solid var(--line);border-radius:22px;display:flex;flex-direction:column;min-height:0;box-shadow:0 20px 50px -30px #1e285040}
 .tabs{display:flex;gap:4px;padding:10px 12px 0;border-bottom:1px solid var(--line)}
-.tabs button{padding:10px 16px;font-size:15px;color:var(--mut);position:relative}.tabs button.on{color:var(--ink)}
+.tabs button{padding:10px 12px;font-size:14.5px;color:var(--mut);position:relative}.tabs button.on{color:var(--ink)}
 .tabs button.on:after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:3px;border-radius:3px;background:var(--accent)}
 .pg{display:none;flex:1;min-height:0;overflow:auto;padding:18px 20px;flex-direction:column;gap:9px}.pg.on{display:flex}
 .pg::-webkit-scrollbar{width:0}
@@ -351,6 +501,14 @@ input[type=text],select{font:inherit;padding:9px 12px;border-radius:10px;border:
 input:focus,select:focus{border-color:var(--accent)}
 .btn{padding:9px 16px;border-radius:11px;background:var(--bg2);border:1px solid var(--line);font-weight:500;transition:background .2s}.btn:hover{background:var(--soft)}
 .sec{font-family:var(--head);font-weight:500;margin-top:8px}.note{font-size:12.5px;color:var(--mut)}
+.opt .btn{flex:none;min-width:92px}.btn:disabled{opacity:.55;cursor:default}
+.hd{display:flex;gap:8px}.hd .btn{flex:none}.cap{font-family:var(--head);font-weight:500;margin-top:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid2 .btn{text-align:left}
+.mini{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:11px;background:var(--bg2);font-size:13px;gap:10px}
+.mini b{font-weight:600}.mini .btn{padding:4px 12px}
+.toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,30px);opacity:0;z-index:20;padding:11px 20px;border-radius:99px;background:var(--ink);color:#fff;transition:all .4s cubic-bezier(.3,1.4,.5,1);pointer-events:none}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.warn{padding:12px 14px;border-radius:12px;background:#fff6e6;color:#8a5a00;font-size:13px}
 .modal{position:fixed;inset:0;z-index:9;background:#ffffffd9;backdrop-filter:blur(14px);display:none;place-items:center}.modal.on{display:grid}
 .card{width:560px;max-height:88vh;display:flex;flex-direction:column;gap:14px;padding:28px;border-radius:26px;background:#fff;border:1px solid var(--line);box-shadow:0 40px 80px -30px #1e285060;animation:pop .5s cubic-bezier(.3,1.3,.5,1)}
 .card h2{font-size:22px;font-weight:600}.tos{overflow:auto;padding:16px 18px;border-radius:14px;background:var(--bg2);border:1px solid var(--line);font-size:13.5px;line-height:1.65;max-height:300px;user-select:text}
@@ -377,13 +535,16 @@ input:focus,select:focus{border-color:var(--accent)}
  </div>
 
  <div class="panel">
-  <div class="tabs"><button class="on" data-p="log">กิจกรรม</button><button data-p="tune">ปรับแต่งโหมด</button><button data-p="set">ตั้งค่า</button></div>
+  <div class="tabs"><button class="on" data-p="log">กิจกรรม</button><button data-p="tune">ปรับแต่งโหมด</button><button data-p="apps">โปรแกรม</button><button data-p="tools">เครื่องมือ</button><button data-p="set">ตั้งค่า</button></div>
   <div class="pg on" id="log"><div class="empty" id="empty"><h2>ยังไม่ได้บูสต์</h2>เลือกโหมดทางซ้ายแล้วกด “เริ่มบูสต์” ผลของแต่ละขั้นตอนจะแสดงที่นี่</div></div>
-  <div class="pg" id="tune"></div>
+  <div class="pg" id="tune"></div><div class="pg" id="apps"></div><div class="pg" id="tools"></div>
   <div class="pg" id="set"></div>
  </div>
 </div>
 
+<div class="toast" id="toast"></div>
+<div class="modal" id="cfm"><div class="card" style="width:460px"><h2 id="cft"></h2><div class="note" id="cfx" style="font-size:13.5px"></div>
+ <div class="acts"><button class="btn" id="cfn">ยกเลิก</button><button class="go" id="cfy">ติดตั้ง</button></div></div></div>
 <div class="modal" id="tosm"><div class="card">
  <h2>ข้อตกลงการใช้งาน</h2>
  <div class="note">เลื่อนอ่านให้จบ แล้วเปิดสวิตช์ยืนยันเพื่อเริ่มใช้งาน</div>
@@ -392,6 +553,7 @@ input:focus,select:focus{border-color:var(--accent)}
   <h3>2. ไม่แก้ไขไฟล์เกม</h3>โปรแกรมไม่แก้ไข ฉีดโค้ด หรือยุ่งกับไฟล์เกม/Anti-cheat และไม่เกี่ยวข้องกับ Cfx.re, FiveM หรือ Rockstar Games การล้างแคช FiveM ลบเฉพาะโฟลเดอร์แคชที่เกมสร้างใหม่ได้เอง
   <h3>3. ไม่รับประกันผลลัพธ์</h3>ผลต่อ FPS ขึ้นกับฮาร์ดแวร์และเซิร์ฟเวอร์ที่เล่น โปรแกรมไม่รับประกันว่า FPS จะเพิ่มขึ้นตามที่ต้องการ
   <h3>4. ใช้ด้วยความรับผิดชอบของผู้ใช้</h3>โหมดที่เปิดการปิดแอปเบื้องหลัง อาจทำให้งานที่ยังไม่บันทึกในแอปเหล่านั้นหาย กรุณาบันทึกงานก่อนบูสต์ ผู้พัฒนาไม่รับผิดชอบต่อความเสียหายหรือข้อมูลสูญหายที่เกิดจากการใช้งาน
+  <h3>4.1 ซอฟต์แวร์ของบุคคลที่สาม</h3>เมนู “โปรแกรม” ใช้ Windows Package Manager (winget) ดาวน์โหลดและติดตั้งโปรแกรมของผู้พัฒนารายอื่น (เช่น Malwarebytes) โดยจะติดตั้งเมื่อคุณกดยืนยันเท่านั้น โปรแกรมเหล่านั้นอยู่ภายใต้ข้อตกลงและค่าใช้จ่ายของผู้พัฒนาแต่ละราย ผู้พัฒนาแอปนี้ไม่ได้เป็นเจ้าของและไม่รับผิดชอบต่อซอฟต์แวร์ดังกล่าว
   <h3>5. ความเป็นส่วนตัว</h3>โปรแกรมไม่ส่งข้อมูลออกจากเครื่อง การตั้งค่าและบันทึกการยอมรับเก็บไว้ในไฟล์ config บนเครื่องคุณเท่านั้น
   <h3>6. การยอมรับ</h3>การกด “ยอมรับและเริ่มใช้งาน” หมายถึงคุณอ่านและเข้าใจข้อตกลงนี้แล้ว หากไม่ยอมรับ โปรแกรมจะปิดตัวลง
  </div>
@@ -467,13 +629,68 @@ function showTos(first){const m=$("tosm"),t=$("tos"),c=$("chk"),sw=$("chksw"),a=
  a.onclick=async()=>{await pywebview.api.tos_accept();m.classList.remove("on")};
  $("dec").onclick=()=>first?pywebview.api.quit():m.classList.remove("on")}
 
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function toast(t){const e=$("toast");e.textContent=t;e.classList.add("on");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("on"),2800)}
+function ask(title,text,fn){$("cft").textContent=title;$("cfx").textContent=text;$("cfm").classList.add("on");
+ $("cfn").onclick=()=>$("cfm").classList.remove("on");$("cfy").onclick=()=>{$("cfm").classList.remove("on");fn()}}
+
+let INST=new Set();
+function appCard(id,name,desc){const d=document.createElement("div");d.className="opt";d.dataset.id=id;
+ d.innerHTML=`<div><p>${esc(name)}</p><small>${esc(desc)}</small></div>`;
+ const b=document.createElement("button");b.className="btn";const has=INST.has(id.toLowerCase());b.textContent=has?"ติดตั้งแล้ว":"ติดตั้ง";b.disabled=has;
+ b.onclick=()=>ask(`ติดตั้ง ${name}?`,`จะดาวน์โหลดจากคลัง winget อย่างเป็นทางการ (${id}) และติดตั้งในเครื่องคุณ Windows อาจขอสิทธิ์ผู้ดูแลระบบ (UAC) ให้กดอนุญาต`,
+  ()=>{b.disabled=true;b.textContent="กำลังติดตั้ง…";pywebview.api.install(id)});
+ d.appendChild(b);return d}
+window.onInst=(id,st,msg)=>{document.querySelectorAll(`[data-id="${id}"]`).forEach(d=>{const b=d.querySelector("button");
+ if(st==="run"){b.disabled=true;b.textContent="กำลังติดตั้ง…"}
+ if(st==="ok"){INST.add(id.toLowerCase());b.disabled=true;b.textContent="ติดตั้งแล้ว"}
+ if(st==="fail"){b.disabled=false;b.textContent="ลองใหม่"}});toast(msg)};
+
+async function renderApps(){const el=$("apps");el.innerHTML=`<div class="note">กำลังโหลดรายการ…</div>`;
+ const r=await pywebview.api.apps();el.innerHTML="";
+ if(!r.winget){el.innerHTML=`<div class="warn">ไม่พบ winget ในเครื่อง ติดตั้ง “App Installer” จาก Microsoft Store แล้วเปิดแอปนี้ใหม่ (ต้องใช้ Windows 10 1809 ขึ้นไป)</div>`;return}
+ r.catalog.forEach(([c,l])=>l.forEach(a=>a[3]&&INST.add(a[0].toLowerCase())));
+ const bar=document.createElement("div");bar.className="hd";bar.innerHTML=`<input type="text" id="q" placeholder="ค้นหาโปรแกรม เช่น malwarebytes, obs, nvidia">`;
+ const sb=document.createElement("button");sb.className="btn";sb.textContent="ค้นหา";bar.appendChild(sb);el.appendChild(bar);
+ const res=document.createElement("div");res.style.cssText="display:flex;flex-direction:column;gap:8px";el.appendChild(res);
+ const go=async()=>{const q=$("q").value.trim();if(!q)return;res.innerHTML=`<div class="note">กำลังค้นหา…</div>`;
+  const l=await pywebview.api.search(q);res.innerHTML=`<div class="cap">ผลการค้นหา</div>`;
+  if(!l.length)res.innerHTML+=`<div class="note">ไม่พบโปรแกรมที่ตรงกัน</div>`;l.forEach(([i,n,d])=>res.appendChild(appCard(i,n,d)))};
+ sb.onclick=go;$("q").onkeydown=e=>e.key==="Enter"&&go();
+ r.catalog.forEach(([c,l])=>{const h=document.createElement("div");h.className="cap";h.textContent=c;el.appendChild(h);l.forEach(([i,n,d])=>el.appendChild(appCard(i,n,d)))})}
+
+const QUICK=[["defender_scan","สแกนไวรัสด่วน (Defender)"],["defender_update","อัปเดตฐานไวรัส"],["sfc","ซ่อมไฟล์ระบบ (SFC)"],["recycle","ล้างถังขยะ"],
+ ["cleanmgr","Disk Cleanup"],["crashes","ล้างไฟล์ Crash ของ FiveM"],["fivem_folder","เปิดโฟลเดอร์ FiveM"],["taskmgr","Task Manager"],
+ ["startup","โปรแกรมเปิดพร้อมเครื่อง"],["winupdate","Windows Update"],["gpu_settings","ตั้งค่ากราฟิก Windows"]];
+
+async function renderTools(){const el=$("tools");el.innerHTML="";
+ el.insertAdjacentHTML("beforeend",`<div class="cap" style="margin-top:0">เครื่องของฉัน</div><div id="si" class="note">กำลังอ่านข้อมูล…</div>`);
+ el.insertAdjacentHTML("beforeend",`<div class="cap">ทางลัดดูแลเครื่อง</div>`);
+ const g=document.createElement("div");g.className="grid2";QUICK.forEach(([id,t])=>{const b=document.createElement("button");b.className="btn";b.textContent=t;
+  b.onclick=async()=>{const o=b.textContent;b.disabled=true;b.textContent="กำลังทำงาน…";toast(await pywebview.api.quick(id));b.disabled=false;b.textContent=o;if(id==="recycle"||id==="crashes")loadInfo()}});
+ el.appendChild(g);
+ el.insertAdjacentHTML("beforeend",`<div class="cap">เช็กปิงเน็ต</div><div id="pg" style="display:flex;flex-direction:column;gap:6px"></div>`);
+ const pb=document.createElement("button");pb.className="btn";pb.textContent="เริ่มทดสอบปิง";pb.onclick=async()=>{pb.disabled=true;pb.textContent="กำลังทดสอบ…";
+  const r=await pywebview.api.ping();$("pg").innerHTML=r.map(([n,m])=>`<div class="mini"><span>${n}</span><b style="color:${m==null?'#e5484d':m<60?'var(--accent)':m<120?'#d99a1d':'#e5484d'}">${m==null?"ไม่ตอบสนอง":m+" ms"}</b></div>`).join("");pb.disabled=false;pb.textContent="ทดสอบอีกครั้ง"};
+ el.appendChild(pb);
+ el.insertAdjacentHTML("beforeend",`<div class="cap">โปรเซสที่กินแรมสูงสุด</div><div id="pc" style="display:flex;flex-direction:column;gap:6px"></div><div class="cap">โปรแกรมเปิดพร้อมเครื่อง</div><div id="su" class="note"></div>`);
+ loadInfo();loadProcs();
+ const su=await pywebview.api.startup_items();$("su").innerHTML=su.length?su.map(([n,t])=>`<div class="mini"><span>${esc(n)}</span><span class="note">${t}</span></div>`).join(""):"ไม่พบรายการ"}
+async function loadInfo(){const s=await pywebview.api.sysinfo();
+ $("si").innerHTML=`<div class="mini"><span>CPU</span><b>${esc(s.cpu||"-")}</b></div><div class="mini" style="margin-top:6px"><span>การ์ดจอ</span><b>${esc(s.gpu||"-")}</b></div>`+
+ s.disks.map(d=>`<div class="meter" style="margin-top:8px;--v:${d[2]}%"><div>ไดรฟ์ ${esc(d[0])} <b>ว่าง ${d[3]} / ${d[1]} GB</b></div><i></i></div>`).join("")}
+async function loadProcs(){const l=await pywebview.api.procs();const el=$("pc");el.innerHTML="";
+ l.forEach(([pid,n,mb])=>{const d=document.createElement("div");d.className="mini";d.innerHTML=`<span>${esc(n)}</span><b>${mb} MB</b>`;
+  const b=document.createElement("button");b.className="btn";b.textContent="ปิด";b.onclick=()=>ask(`ปิด ${n}?`,"งานที่ยังไม่บันทึกในโปรแกรมนี้อาจหาย",async()=>{toast(await pywebview.api.kill(pid,n));loadProcs()});
+  d.appendChild(b);el.appendChild(d)})}
+
 async function tick(){try{const s=await pywebview.api.stats();
  $("mc").style.setProperty("--v",s.cpu+"%");$("vc").textContent=Math.round(s.cpu)+"%";$("mr").style.setProperty("--v",s.ram+"%");$("vr").textContent=Math.round(s.ram)+"%";
  $("badge").classList.toggle("on",s.fivem);$("btxt").textContent=s.fivem?"FiveM กำลังทำงาน":"ยังไม่พบ FiveM"}catch(e){}}
 
 window.addEventListener("pywebviewready",async()=>{
  S=await pywebview.api.get_state();setAccent(S.cfg.accent);document.body.classList.toggle("noanim",!S.cfg.anim);
- setMode(S.cfg.mode);renderTune();renderSet();
+ setMode(S.cfg.mode);renderTune();renderSet();renderApps();renderTools();
  $("rec").textContent=`แนะนำสำหรับเครื่องนี้ (RAM ${S.ram_gb} GB): ${S.rec.toUpperCase()}`;
  if(!S.tos_ok)showTos(true);tick();setInterval(tick,1500)});
 </script></body></html>
@@ -481,8 +698,8 @@ window.addEventListener("pywebviewready",async()=>{
 
 
 def main():
-    w = webview.create_window("FiveM Booster", html=HTML, js_api=API, width=1000, height=700,
-                              min_size=(900, 640), background_color="#FFFFFF")
+    w = webview.create_window("FiveM Booster", html=HTML, js_api=API, width=1120, height=740,
+                              min_size=(1020, 660), background_color="#FFFFFF")
     API._window = w
     threading.Thread(target=API.watcher, daemon=True).start()
     webview.start()
